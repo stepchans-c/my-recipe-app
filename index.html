@@ -43,6 +43,11 @@ const CAT_ICONS={"牛肉":"🥩","雞肉":"🍗","豬肉":"🐷","意粉":"🍝"
 const CAT_COLORS={"牛肉":"#ef4444","雞肉":"#f59e0b","豬肉":"#ec4899","意粉":"#f97316","海鮮":"#3b82f6","飲品":"#06b6d4","甜品":"#a855f7","其它":"#6b7280"};
 const LS_KEY="ai_recipes_v2";
 const LS_APIKEY="user_api_key";
+const LS_YTKEY="user_yt_api_key";
+function extractYouTubeId(url){
+  const m = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
 const genId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const load=k=>{ try{ return JSON.parse(localStorage.getItem(k)||"null") }catch{ return null }};
 const save=(k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)) }catch{} };
@@ -113,7 +118,7 @@ function ApiKeySetup({onSave}){
 }
 
 // ─── ADD TAB ─────────────────────────────────────────────
-function AddTab({onSaved,showToast,apiKey}){
+function AddTab({onSaved,showToast,apiKey,ytApiKey}){
   const [url,setUrl]=useState("");
   const [pasteText,setPasteText]=useState("");
   const [showPaste,setShowPaste]=useState(false);
@@ -126,12 +131,38 @@ function AddTab({onSaved,showToast,apiKey}){
   const handleParse=async()=>{
     if(!url.trim()&&!pasteText.trim()){showToast("請貼上連結或食譜內容","error");return;}
     setParsing(true);
+
+    let contentForAI = pasteText.trim();
+    const ytId = url.trim() ? extractYouTubeId(url.trim()) : null;
+
+    // Auto-fetch YouTube title+description if it's a YouTube link and a YT API key is set
+    if(ytId && !contentForAI){
+      if(!ytApiKey){
+        setParsing(false);
+        showToast("偵測到YouTube連結，請先到「設定」加入YouTube API Key","error");
+        return;
+      }
+      setStage("📺 正在讀取YouTube影片資料…");
+      try{
+        const ytRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${ytId}&key=${ytApiKey}`);
+        const ytData = await ytRes.json();
+        if(ytData.error) throw new Error(ytData.error.message||"YouTube API 錯誤");
+        const snippet = ytData.items && ytData.items[0] && ytData.items[0].snippet;
+        if(!snippet) throw new Error("搵唔到呢條影片資料");
+        contentForAI = `影片標題：${snippet.title}\n\n影片簡介：\n${snippet.description}`;
+      }catch(e){
+        setParsing(false); setStage("");
+        showToast("YouTube讀取失敗："+e.message,"error");
+        return;
+      }
+    }
+
     setStage("🔍 正在讀取內容…");
-    await new Promise(r=>setTimeout(r,500));
+    await new Promise(r=>setTimeout(r,400));
     setStage("🤖 AI 分析中…");
     try{
-      const prompt = pasteText.trim()
-        ? `你是食譜解析AI。以下係用戶複製貼上嘅食譜文字內容（可能來自YouTube影片簡介、Instagram貼文或其他來源），請從中提取結構化食譜資料：\n\n${pasteText.trim().slice(0,6000)}\n\n只回傳JSON，不要其他文字或markdown：\n{"name":"菜式名稱","category":"牛肉/雞肉/豬肉/意粉/海鮮/飲品/甜品/其它 選一個","ingredients":["食材1（含份量）","食材2"],"steps":["步驟1","步驟2"]}`
+      const prompt = contentForAI
+        ? `你是食譜解析AI。以下係食譜相關文字內容（可能來自YouTube影片標題/簡介、Instagram貼文或其他來源），請從中提取結構化食譜資料：\n\n${contentForAI.slice(0,6000)}\n\n只回傳JSON，不要其他文字或markdown：\n{"name":"菜式名稱","category":"牛肉/雞肉/豬肉/意粉/海鮮/飲品/甜品/其它 選一個","ingredients":["食材1（含份量）","食材2"],"steps":["步驟1","步驟2"]}`
         : `你是食譜解析AI。根據此網址推斷並生成詳細中文食譜。\n網址：${url}\n\n只回傳JSON，不要其他文字或markdown：\n{"name":"菜式名稱","category":"牛肉/雞肉/豬肉/意粉/海鮮/飲品/甜品/其它 選一個","ingredients":["食材1（含份量）","食材2"],"steps":["步驟1","步驟2"]}`;
       const res=await fetch("https://api.anthropic.com/v1/messages",{
         method:"POST",
@@ -181,22 +212,27 @@ function AddTab({onSaved,showToast,apiKey}){
     <div style={{padding:"0 16px 24px"}} className="fade">
       <Sec title="AI 智能解析" icon="🔗">
         <div style={{display:"flex",gap:8,marginBottom:8}}>
-          <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="貼上食譜網址…" style={{...INP,flex:1}}/>
+          <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="貼上食譜網址（支援YouTube自動讀取）…" style={{...INP,flex:1}}/>
           <Btn onClick={handleParse} disabled={parsing}
             style={{padding:"12px 13px",borderRadius:12,background:parsing?"#1a3d2b":"#10b981",color:"#fff",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
             {parsing?<><Spinner/><span>解析</span></>:"AI 解析"}
           </Btn>
         </div>
+        {url.trim() && extractYouTubeId(url.trim()) && (
+          <p style={{color:ytApiKey?"#10b981":"#f59e0b",fontSize:12,marginBottom:4}}>
+            {ytApiKey ? "📺 已偵測到YouTube連結，將自動讀取影片簡介" : "⚠️ 偵測到YouTube連結，但未設定YouTube API Key（去「設定」加入）"}
+          </p>
+        )}
         <button onClick={()=>setShowPaste(s=>!s)}
           style={{background:"none",border:"none",color:"#10b981",fontSize:12,fontWeight:600,cursor:"pointer",padding:"4px 0",display:"flex",alignItems:"center",gap:4}}>
-          {showPaste?"▾":"▸"} YouTube／IG 連結解析唔到？試下貼上文字內容
+          {showPaste?"▾":"▸"} 或者直接貼上食譜文字內容
         </button>
         {showPaste && (
           <div style={{marginTop:8}}>
             <textarea value={pasteText} onChange={e=>setPasteText(e.target.value)}
-              placeholder={"貼上YouTube影片簡介、IG文字說明，或任何食譜文字…\n（YouTube網址本身冇文字內容，AI解析唔到，但影片簡介通常有齊材料同步驟）"}
+              placeholder={"貼上IG文字說明，或任何食譜文字…"}
               rows={5} style={{...INP,resize:"none",lineHeight:1.7,fontSize:13}}/>
-            <p style={{color:"#333",fontSize:11,marginTop:5}}>💡 如果呢欄有內容，AI 會優先用呢度嘅文字解析，唔再淨係靠網址估</p>
+            <p style={{color:"#333",fontSize:11,marginTop:5}}>💡 如果呢欄有內容，AI 會優先用呢度嘅文字解析</p>
           </div>
         )}
         {stage&&<div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0"}}>
@@ -458,15 +494,55 @@ function ConverterTab(){
 }
 
 // ─── SETTINGS TAB ─────────────────────────────────────────
-function SettingsTab({apiKey,onChangeKey}){
+function SettingsTab({apiKey,onChangeKey,ytApiKey,onChangeYtKey,recipes,onImport}){
   const [editing,setEditing]=useState(false);
   const [newKey,setNewKey]=useState("");
   const [show,setShow]=useState(false);
+  const [editingYt,setEditingYt]=useState(false);
+  const [newYtKey,setNewYtKey]=useState("");
+  const [showYt,setShowYt]=useState(false);
+  const fileInputRef=useRef(null);
   const masked="sk-ant-..."+apiKey.slice(-6);
+  const maskedYt = ytApiKey ? ytApiKey.slice(0,6)+"..."+ytApiKey.slice(-4) : "";
+
+  const handleExport=()=>{
+    const data=JSON.stringify({exportedAt:new Date().toISOString(),count:recipes.length,recipes},null,2);
+    const blob=new Blob([data],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    const today=new Date().toISOString().slice(0,10);
+    a.href=url;
+    a.download=`食譜備份_${today}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportFile=(e)=>{
+    const file=e.target.files && e.target.files[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=(ev)=>{
+      try{
+        const parsed=JSON.parse(ev.target.result);
+        const list = Array.isArray(parsed) ? parsed : parsed.recipes;
+        if(!Array.isArray(list)) throw new Error("檔案格式不正確");
+        const valid = list.filter(r=>r && r.name && Array.isArray(r.ingredients) && Array.isArray(r.steps));
+        if(valid.length===0) throw new Error("檔案內冇有效食譜");
+        onImport(valid);
+      }catch(err){
+        alert("匯入失敗："+err.message);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value="";
+  };
+
   return(
     <div style={{padding:"0 16px 24px"}} className="fade">
       <div style={{...CARD,padding:20,marginBottom:16}}>
-        <p style={SECS}>🔑 API Key</p>
+        <p style={SECS}>🔑 Anthropic API Key</p>
         {editing?(
           <>
             <div style={{position:"relative",marginBottom:12}}>
@@ -487,9 +563,51 @@ function SettingsTab({apiKey,onChangeKey}){
           </div>
         )}
       </div>
+
+      <div style={{...CARD,padding:20,marginBottom:16}}>
+        <p style={SECS}>📺 YouTube API Key（選用）</p>
+        <p style={{color:"#444",fontSize:12,marginBottom:12,lineHeight:1.6}}>設定後，貼上YouTube連結可自動讀取影片標題同簡介，AI解析會更準確</p>
+        {editingYt?(
+          <>
+            <div style={{position:"relative",marginBottom:12}}>
+              <input type={showYt?"text":"password"} value={newYtKey} onChange={e=>setNewYtKey(e.target.value)}
+                placeholder="AIzaSy..." style={{...INP,paddingRight:50}}/>
+              <button onClick={()=>setShowYt(s=>!s)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#666",fontSize:16,cursor:"pointer"}}>{showYt?"🙈":"👁️"}</button>
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <Btn onClick={()=>setEditingYt(false)} style={{flex:1,padding:"11px 0",borderRadius:12,background:"#2a2a2a",color:"#fff",fontSize:14}}>取消</Btn>
+              <Btn onClick={()=>{if(newYtKey.trim()){onChangeYtKey(newYtKey.trim());setEditingYt(false);}}}
+                style={{flex:1,padding:"11px 0",borderRadius:12,background:"#10b981",color:"#fff",fontSize:14,fontWeight:700}}>儲存</Btn>
+            </div>
+          </>
+        ):(
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{color:ytApiKey?"#888":"#444",fontSize:14,fontFamily:"monospace"}}>{ytApiKey?maskedYt:"未設定"}</span>
+            <Btn onClick={()=>{setEditingYt(true);setNewYtKey("");}} style={{padding:"7px 14px",borderRadius:10,background:"#1e1e1e",border:"1px solid #2a2a2a",color:"#aaa",fontSize:13}}>{ytApiKey?"更改":"設定"}</Btn>
+          </div>
+        )}
+      </div>
+
+      <div style={{...CARD,padding:20,marginBottom:16}}>
+        <p style={SECS}>💾 備份／還原食譜</p>
+        <p style={{color:"#444",fontSize:12,marginBottom:14,lineHeight:1.6}}>食譜只儲存喺呢部裝置，建議定期匯出備份，換手機或清除瀏覽器資料前記得先匯出</p>
+        <div style={{display:"flex",gap:10,marginBottom:10}}>
+          <Btn onClick={handleExport} disabled={recipes.length===0}
+            style={{flex:1,padding:"12px 0",borderRadius:12,background:recipes.length===0?"#1a1a1a":"#1e1e1e",border:"1px solid #2a2a2a",color:recipes.length===0?"#444":"#10b981",fontSize:14,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+            ⬇️ 匯出（{recipes.length}）
+          </Btn>
+          <Btn onClick={()=>fileInputRef.current && fileInputRef.current.click()}
+            style={{flex:1,padding:"12px 0",borderRadius:12,background:"#1e1e1e",border:"1px solid #2a2a2a",color:"#aaa",fontSize:14,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+            ⬆️ 匯入
+          </Btn>
+          <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleImportFile} style={{display:"none"}}/>
+        </div>
+        <p style={{color:"#333",fontSize:11,lineHeight:1.6}}>匯入會將檔案內嘅食譜加入現有清單（唔會覆蓋或刪除已有食譜）</p>
+      </div>
+
       <div style={{...CARD,padding:16}}>
         <p style={SECS}>ℹ️ 關於</p>
-        <p style={{color:"#555",fontSize:13,lineHeight:1.8}}>AI 食譜筆記 v2.0<br/>API Key 只儲存於本地裝置<br/>不會上傳到任何伺服器</p>
+        <p style={{color:"#555",fontSize:13,lineHeight:1.8}}>AI 食譜筆記 v2.2<br/>API Key 只儲存於本地裝置<br/>不會上傳到任何伺服器</p>
       </div>
     </div>
   );
@@ -520,6 +638,7 @@ function BottomNav({tab,setTab,count}){
 // ─── ROOT APP ─────────────────────────────────────────────
 function App(){
   const [apiKey,setApiKey]=useState(()=>load(LS_APIKEY)||"");
+  const [ytApiKey,setYtApiKey]=useState(()=>load(LS_YTKEY)||"");
   const [tab,setTab]=useState("list");
   const [recipes,setRecipes]=useState(()=>load(LS_KEY)||[]);
   const [viewRecipe,setViewRecipe]=useState(null);
@@ -530,9 +649,15 @@ function App(){
 
   const showToast=(msg,type)=>{setToast({msg,type:type||"success"});setTimeout(()=>setToast(null),2500);};
   const handleSaveKey=key=>{setApiKey(key);save(LS_APIKEY,key);showToast("API Key 已儲存 ✓");};
+  const handleSaveYtKey=key=>{setYtApiKey(key);save(LS_YTKEY,key);showToast("YouTube API Key 已儲存 ✓");};
   const handleSaved=rec=>{setRecipes(r=>[rec,...r]);setTab("list");};
   const handleUpdate=u=>{setRecipes(r=>r.map(x=>x.id===u.id?u:x));setViewRecipe(u);};
   const handleDelete=id=>{setRecipes(r=>r.filter(x=>x.id!==id));setDC(null);if(viewRecipe&&viewRecipe.id===id)setViewRecipe(null);showToast("已刪除食譜");};
+  const handleImportRecipes=imported=>{
+    const withNewIds=imported.map(r=>({...r,id:genId(),category:CATEGORIES.includes(r.category)?r.category:"其它",createdAt:r.createdAt||Date.now()}));
+    setRecipes(r=>[...withNewIds,...r]);
+    showToast(`已匯入 ${withNewIds.length} 個食譜 🎉`);
+  };
 
   const tabTitle={list:"我的食譜",add:"新增食譜",conv:"換算工具",cfg:"設定"};
   const SAFEPAD="max(44px, calc(env(safe-area-inset-top) + 12px))";
@@ -552,9 +677,9 @@ function App(){
             <h1 style={{color:"#fff",fontSize:24,fontWeight:700,letterSpacing:-0.5}}>{tabTitle[tab]}</h1>
           </div>
           {tab==="list"&&<MyRecipesTab recipes={recipes} onView={setViewRecipe} onDelete={id=>setDC(id)}/>}
-          {tab==="add" &&<AddTab onSaved={handleSaved} showToast={showToast} apiKey={apiKey}/>}
+          {tab==="add" &&<AddTab onSaved={handleSaved} showToast={showToast} apiKey={apiKey} ytApiKey={ytApiKey}/>}
           {tab==="conv"&&<ConverterTab/>}
-          {tab==="cfg" &&<SettingsTab apiKey={apiKey} onChangeKey={handleSaveKey}/>}
+          {tab==="cfg" &&<SettingsTab apiKey={apiKey} onChangeKey={handleSaveKey} ytApiKey={ytApiKey} onChangeYtKey={handleSaveYtKey} recipes={recipes} onImport={handleImportRecipes}/>}
         </>
       )}
       {deleteConfirm&&(
