@@ -115,6 +115,8 @@ function ApiKeySetup({onSave}){
 // ─── ADD TAB ─────────────────────────────────────────────
 function AddTab({onSaved,showToast,apiKey}){
   const [url,setUrl]=useState("");
+  const [pasteText,setPasteText]=useState("");
+  const [showPaste,setShowPaste]=useState(false);
   const [parsing,setParsing]=useState(false);
   const [stage,setStage]=useState("");
   const [form,setForm]=useState({name:"",category:"牛肉",ingredients:"",steps:""});
@@ -122,13 +124,15 @@ function AddTab({onSaved,showToast,apiKey}){
   const up=(k,v)=>setForm(f=>({...f,[k]:v}));
 
   const handleParse=async()=>{
-    if(!url.trim()){showToast("請先貼上連結","error");return;}
+    if(!url.trim()&&!pasteText.trim()){showToast("請貼上連結或食譜內容","error");return;}
     setParsing(true);
-    setStage("🔍 正在讀取連結…");
-    await new Promise(r=>setTimeout(r,600));
+    setStage("🔍 正在讀取內容…");
+    await new Promise(r=>setTimeout(r,500));
     setStage("🤖 AI 分析中…");
     try{
-      const prompt=`你是食譜解析AI。根據此網址推斷並生成詳細中文食譜。\n網址：${url}\n\n只回傳JSON，不要其他文字或markdown：\n{"name":"菜式名稱","category":"牛肉/雞肉/豬肉/意粉/海鮮/飲品/甜品/其它 選一個","ingredients":["食材1（含份量）","食材2"],"steps":["步驟1","步驟2"]}`;
+      const prompt = pasteText.trim()
+        ? `你是食譜解析AI。以下係用戶複製貼上嘅食譜文字內容（可能來自YouTube影片簡介、Instagram貼文或其他來源），請從中提取結構化食譜資料：\n\n${pasteText.trim().slice(0,6000)}\n\n只回傳JSON，不要其他文字或markdown：\n{"name":"菜式名稱","category":"牛肉/雞肉/豬肉/意粉/海鮮/飲品/甜品/其它 選一個","ingredients":["食材1（含份量）","食材2"],"steps":["步驟1","步驟2"]}`
+        : `你是食譜解析AI。根據此網址推斷並生成詳細中文食譜。\n網址：${url}\n\n只回傳JSON，不要其他文字或markdown：\n{"name":"菜式名稱","category":"牛肉/雞肉/豬肉/意粉/海鮮/飲品/甜品/其它 選一個","ingredients":["食材1（含份量）","食材2"],"steps":["步驟1","步驟2"]}`;
       const res=await fetch("https://api.anthropic.com/v1/messages",{
         method:"POST",
         headers:{
@@ -170,7 +174,7 @@ function AddTab({onSaved,showToast,apiKey}){
       steps:form.steps.split("\n").map(l=>l.trim()).filter(Boolean),
       createdAt:Date.now()};
     onSaved(rec);showToast("食譜已儲存 🎉");setSaving(true);
-    setTimeout(()=>{setUrl("");setForm({name:"",category:"牛肉",ingredients:"",steps:""});setSaving(false);},800);
+    setTimeout(()=>{setUrl("");setPasteText("");setForm({name:"",category:"牛肉",ingredients:"",steps:""});setSaving(false);},800);
   };
 
   return(
@@ -183,6 +187,18 @@ function AddTab({onSaved,showToast,apiKey}){
             {parsing?<><Spinner/><span>解析</span></>:"AI 解析"}
           </Btn>
         </div>
+        <button onClick={()=>setShowPaste(s=>!s)}
+          style={{background:"none",border:"none",color:"#10b981",fontSize:12,fontWeight:600,cursor:"pointer",padding:"4px 0",display:"flex",alignItems:"center",gap:4}}>
+          {showPaste?"▾":"▸"} YouTube／IG 連結解析唔到？試下貼上文字內容
+        </button>
+        {showPaste && (
+          <div style={{marginTop:8}}>
+            <textarea value={pasteText} onChange={e=>setPasteText(e.target.value)}
+              placeholder={"貼上YouTube影片簡介、IG文字說明，或任何食譜文字…\n（YouTube網址本身冇文字內容，AI解析唔到，但影片簡介通常有齊材料同步驟）"}
+              rows={5} style={{...INP,resize:"none",lineHeight:1.7,fontSize:13}}/>
+            <p style={{color:"#333",fontSize:11,marginTop:5}}>💡 如果呢欄有內容，AI 會優先用呢度嘅文字解析，唔再淨係靠網址估</p>
+          </div>
+        )}
         {stage&&<div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0"}}>
           {parsing&&<DotPulse/>}<span style={{color:"#10b981",fontSize:13}}>{stage}</span>
         </div>}
