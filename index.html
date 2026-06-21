@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="食譜筆記">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#121212">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png">
+  <title>AI 食譜筆記</title>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+    html,body{background:#121212;color:#fff;font-family:-apple-system,'SF Pro Display',Helvetica,sans-serif;min-height:100vh;overscroll-behavior:none}
+    html{-webkit-text-size-adjust:100%}
+    ::-webkit-scrollbar{width:3px}
+    ::-webkit-scrollbar-thumb{background:#2a2a2a;border-radius:2px}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    @keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+    .fade{animation:fadeIn .25s ease}
+    .slideup{animation:slideUp .3s ease}
+    textarea,input,select{font-family:inherit}
+    select option{background:#1e1e1e;color:#e8e8e8}
+    button:active{opacity:.8}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.20/babel.min.js" crossorigin></script>
+<script type="text/babel">
+const {useState,useRef,useEffect}=React;
+
+// ─── Constants ───────────────────────────────────────────
+const CATEGORIES=["牛肉","雞肉","豬肉","意粉","海鮮","飲品","甜品","其它"];
+const CAT_ICONS={"牛肉":"🥩","雞肉":"🍗","豬肉":"🐷","意粉":"🍝","海鮮":"🦐","飲品":"🍹","甜品":"🍰","其它":"🥦"};
+const CAT_COLORS={"牛肉":"#ef4444","雞肉":"#f59e0b","豬肉":"#ec4899","意粉":"#f97316","海鮮":"#3b82f6","飲品":"#06b6d4","甜品":"#a855f7","其它":"#6b7280"};
+const LS_KEY="ai_recipes_v2";
+const LS_APIKEY="user_api_key";
+const genId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const load=k=>{ try{ return JSON.parse(localStorage.getItem(k)||"null") }catch{ return null }};
+const save=(k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)) }catch{} };
+
+// ─── Shared styles ───────────────────────────────────────
+const INP={background:"#1e1e1e",border:"1px solid #2a2a2a",color:"#e8e8e8",borderRadius:12,padding:"12px 14px",fontSize:15,width:"100%",display:"block",outline:"none",fontFamily:"inherit"};
+const LBL={color:"#666",fontSize:11,fontWeight:700,letterSpacing:1.2,marginBottom:7,display:"block",textTransform:"uppercase"};
+const CARD={background:"#1a1a1a",borderRadius:16,border:"1px solid #242424"};
+const SECS={color:"#444",fontSize:11,fontWeight:700,letterSpacing:1.8,marginBottom:10,textTransform:"uppercase"};
+
+// ─── Mini components ─────────────────────────────────────
+function Toast({msg,type}){
+  return <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,
+    background:type==="error"?"#7f1d1d":"#064e3b",
+    border:"1px solid "+(type==="error"?"#ef444455":"#10b98155"),
+    color:"#fff",padding:"10px 20px",borderRadius:12,fontSize:14,fontWeight:500,
+    whiteSpace:"nowrap",boxShadow:"0 6px 24px rgba(0,0,0,.6)",animation:"fadeIn .2s ease"}}>{msg}</div>;
+}
+function Spinner(){return <div style={{width:15,height:15,border:"2px solid #1a3d2b",borderTopColor:"#10b981",borderRadius:"50%",animation:"spin .7s linear infinite",flexShrink:0}}/>;}
+function DotPulse(){return <div style={{display:"flex",gap:4}}>{[0,.18,.36].map((d,i)=><span key={i} style={{width:5,height:5,borderRadius:"50%",background:"#10b981",display:"inline-block",animation:`pulse .9s ease ${d}s infinite`}}/>)}</div>;}
+function CatPill({cat}){return <span style={{fontSize:11,fontWeight:700,padding:"3px 9px",borderRadius:20,background:CAT_COLORS[cat]+"28",color:CAT_COLORS[cat],display:"inline-block",whiteSpace:"nowrap"}}>{CAT_ICONS[cat]} {cat}</span>;}
+function Sec({title,icon,children}){return <div style={{marginBottom:20}}><p style={SECS}>{icon} {title}</p>{children}</div>;}
+function Btn({onClick,disabled,children,style}){return <button onClick={onClick} disabled={disabled} style={{border:"none",cursor:disabled?"not-allowed":"pointer",fontFamily:"inherit",...style}}>{children}</button>;}
+
+// ─── API Key Setup Screen ────────────────────────────────
+function ApiKeySetup({onSave}){
+  const [key,setKey]=useState("");
+  const [show,setShow]=useState(false);
+  return(
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",justifyContent:"center",padding:"0 24px",background:"#121212"}}>
+      <div style={{textAlign:"center",marginBottom:40}}>
+        <div style={{fontSize:56,marginBottom:16}}>🍳</div>
+        <p style={{color:"#10b981",fontSize:11,fontWeight:700,letterSpacing:2.5,marginBottom:8}}>AI RECIPE NOTES</p>
+        <h1 style={{color:"#fff",fontSize:24,fontWeight:700,marginBottom:12}}>設定 API Key</h1>
+        <p style={{color:"#555",fontSize:14,lineHeight:1.6}}>首次使用需要輸入你的 Anthropic API Key，儲存後不需要再輸入</p>
+      </div>
+      <div style={{...CARD,padding:20,marginBottom:16}}>
+        <label style={LBL}>Anthropic API Key</label>
+        <div style={{position:"relative"}}>
+          <input
+            type={show?"text":"password"}
+            value={key}
+            onChange={e=>setKey(e.target.value)}
+            placeholder="sk-ant-api03-..."
+            style={{...INP,paddingRight:50,letterSpacing:show?"normal":"2px"}}
+          />
+          <button onClick={()=>setShow(s=>!s)}
+            style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#666",fontSize:16,cursor:"pointer"}}>
+            {show?"🙈":"👁️"}
+          </button>
+        </div>
+        <p style={{color:"#444",fontSize:12,marginTop:10,lineHeight:1.6}}>
+          Key 只存在你的裝置本地，不會上傳到任何伺服器
+        </p>
+      </div>
+      <Btn onClick={()=>{ if(key.trim().startsWith("sk-ant"))onSave(key.trim()); }}
+        disabled={!key.trim().startsWith("sk-ant")}
+        style={{width:"100%",padding:"15px 0",borderRadius:16,fontSize:16,fontWeight:700,
+          background:key.trim().startsWith("sk-ant")?"#10b981":"#1a3d2b",
+          color:"#fff",boxShadow:"0 4px 24px rgba(16,185,129,.3)",transition:"all .2s"}}>
+        開始使用
+      </Btn>
+      <p style={{color:"#333",fontSize:12,textAlign:"center",marginTop:16}}>
+        申請 Key：console.anthropic.com → API Keys
+      </p>
+    </div>
+  );
+}
+
+// ─── ADD TAB ─────────────────────────────────────────────
+function AddTab({onSaved,showToast,apiKey}){
+  const [url,setUrl]=useState("");
+  const [parsing,setParsing]=useState(false);
+  const [stage,setStage]=useState("");
+  const [form,setForm]=useState({name:"",category:"牛肉",ingredients:"",steps:""});
+  const [saving,setSaving]=useState(false);
+  const up=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  const handleParse=async()=>{
+    if(!url.trim()){showToast("請先貼上連結","error");return;}
+    setParsing(true);
+    setStage("🔍 正在讀取連結…");
+    await new Promise(r=>setTimeout(r,600));
+    setStage("🤖 AI 分析中…");
+    try{
+      const prompt=`你是食譜解析AI。根據此網址推斷並生成詳細中文食譜。\n網址：${url}\n\n只回傳JSON，不要其他文字或markdown：\n{"name":"菜式名稱","category":"牛肉/雞肉/豬肉/意粉/海鮮/飲品/甜品/其它 選一個","ingredients":["食材1（含份量）","食材2"],"steps":["步驟1","步驟2"]}`;
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json",
+          "x-api-key":apiKey,
+          "anthropic-version":"2023-06-01",
+          "anthropic-dangerous-direct-browser-access":"true"
+        },
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",
+          max_tokens:1500,
+          messages:[{role:"user",content:prompt}]
+        })
+      });
+      const data=await res.json();
+      if(!res.ok) throw new Error(data.error?.message||"API error "+res.status);
+      const raw=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      setForm({
+        name:parsed.name||"",
+        category:CATEGORIES.includes(parsed.category)?parsed.category:"其它",
+        ingredients:(parsed.ingredients||[]).join("\n"),
+        steps:(parsed.steps||[]).join("\n"),
+      });
+      setStage("✨ 完成！");
+      setTimeout(()=>setStage(""),2000);
+    }catch(e){
+      showToast("解析失敗："+e.message,"error");
+      setStage("");
+    }
+    setParsing(false);
+  };
+
+  const handleSave=()=>{
+    if(!form.name.trim()){showToast("請填寫菜式名稱","error");return;}
+    if(!form.ingredients.trim()){showToast("請填寫食材","error");return;}
+    const rec={id:genId(),name:form.name.trim(),category:form.category,url:url.trim(),
+      ingredients:form.ingredients.split("\n").map(l=>l.trim()).filter(Boolean),
+      steps:form.steps.split("\n").map(l=>l.trim()).filter(Boolean),
+      createdAt:Date.now()};
+    onSaved(rec);showToast("食譜已儲存 🎉");setSaving(true);
+    setTimeout(()=>{setUrl("");setForm({name:"",category:"牛肉",ingredients:"",steps:""});setSaving(false);},800);
+  };
+
+  return(
+    <div style={{padding:"0 16px 24px"}} className="fade">
+      <Sec title="AI 智能解析" icon="🔗">
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
+          <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="貼上食譜網址…" style={{...INP,flex:1}}/>
+          <Btn onClick={handleParse} disabled={parsing}
+            style={{padding:"12px 13px",borderRadius:12,background:parsing?"#1a3d2b":"#10b981",color:"#fff",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
+            {parsing?<><Spinner/><span>解析</span></>:"AI 解析"}
+          </Btn>
+        </div>
+        {stage&&<div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0"}}>
+          {parsing&&<DotPulse/>}<span style={{color:"#10b981",fontSize:13}}>{stage}</span>
+        </div>}
+      </Sec>
+
+      <Sec title="菜式資料" icon="📋">
+        <label style={LBL}>菜式名稱</label>
+        <input value={form.name} onChange={e=>up("name",e.target.value)} placeholder="例：蜜椒薯仔牛柳粒" style={{...INP,marginBottom:14}}/>
+        <label style={LBL}>分類</label>
+        <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+          {CATEGORIES.map(c=>(
+            <Btn key={c} onClick={()=>up("category",c)}
+              style={{padding:"7px 13px",borderRadius:20,fontSize:13,fontWeight:500,
+                background:form.category===c?CAT_COLORS[c]+"28":"#1e1e1e",
+                border:"1.5px solid "+(form.category===c?CAT_COLORS[c]:"#2a2a2a"),
+                color:form.category===c?CAT_COLORS[c]:"#555",transition:"all .15s"}}>
+              {CAT_ICONS[c]} {c}
+            </Btn>
+          ))}
+        </div>
+      </Sec>
+
+      <Sec title="食材清單" icon="🛒">
+        <label style={LBL}>每行一項</label>
+        <textarea value={form.ingredients} onChange={e=>up("ingredients",e.target.value)}
+          placeholder={"牛柳粒 200g\n薯仔 1個\n蒜頭 4瓣"} rows={6} style={{...INP,resize:"none",lineHeight:1.8}}/>
+      </Sec>
+
+      <Sec title="製作步驟" icon="👨‍🍳">
+        <label style={LBL}>每行一個步驟</label>
+        <textarea value={form.steps} onChange={e=>up("steps",e.target.value)}
+          placeholder={"醃肉 15 分鐘\n炸薯粒至金黃\n大火炒勻上碟"} rows={6} style={{...INP,resize:"none",lineHeight:1.8}}/>
+      </Sec>
+
+      <Btn onClick={handleSave}
+        style={{width:"100%",padding:"15px 0",borderRadius:16,fontSize:16,fontWeight:700,
+          background:saving?"#065f46":"#10b981",color:"#fff",
+          boxShadow:saving?"none":"0 4px 24px rgba(16,185,129,.4)",transition:"all .2s"}}>
+        {saving?"✓ 已儲存！":"儲存食譜"}
+      </Btn>
+    </div>
+  );
+}
+
+// ─── RECIPE CARD ─────────────────────────────────────────
+function RecipeCard({recipe,onView,onDelete}){
+  const [swiped,setSwiped]=useState(false);
+  const sx=useRef(0);
+  return(
+    <div style={{position:"relative",overflow:"hidden",borderRadius:16}}>
+      <div onClick={()=>swiped?setSwiped(false):onView()}
+        onTouchStart={e=>{sx.current=e.touches[0].clientX}}
+        onTouchEnd={e=>{const d=sx.current-e.changedTouches[0].clientX;if(d>50)setSwiped(true);if(d<-30)setSwiped(false);}}
+        style={{...CARD,padding:14,transform:swiped?"translateX(-68px)":"translateX(0)",transition:"transform .25s ease",position:"relative",zIndex:1,cursor:"pointer"}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
+          <div style={{flex:1}}>
+            <div style={{marginBottom:7}}><CatPill cat={recipe.category}/></div>
+            <p style={{color:"#f0f0f0",fontSize:16,fontWeight:600,marginBottom:4}}>{recipe.name}</p>
+            <p style={{color:"#444",fontSize:12}}>{recipe.ingredients.length} 種食材 · {recipe.steps.length} 個步驟</p>
+          </div>
+          <div style={{width:46,height:46,borderRadius:12,background:"#222",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0,marginLeft:12}}>{CAT_ICONS[recipe.category]}</div>
+        </div>
+      </div>
+      <button onClick={e=>{e.stopPropagation();onDelete();}}
+        style={{position:"absolute",right:0,top:0,bottom:0,width:62,background:"#7f1d1d",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,border:"none",cursor:"pointer",zIndex:0,borderRadius:"0 16px 16px 0"}}>🗑️</button>
+    </div>
+  );
+}
+
+// ─── MY RECIPES TAB ──────────────────────────────────────
+function MyRecipesTab({recipes,onView,onDelete}){
+  const [search,setSearch]=useState("");
+  const [filterCat,setFilterCat]=useState("全部");
+  const usedCats=[...new Set(recipes.map(r=>r.category))];
+  const filtered=recipes.filter(r=>(r.name.includes(search)||r.category.includes(search))&&(filterCat==="全部"||r.category===filterCat));
+  const grouped={};
+  filtered.forEach(r=>{if(!grouped[r.category])grouped[r.category]=[];grouped[r.category].push(r);});
+  return(
+    <div style={{padding:"0 16px 24px"}} className="fade">
+      <div style={{position:"relative",marginBottom:12}}>
+        <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:15}}>🔍</span>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜尋食譜…" style={{...INP,paddingLeft:42}}/>
+      </div>
+      {usedCats.length>0&&(
+        <div style={{display:"flex",gap:7,marginBottom:16,overflowX:"auto",paddingBottom:4}}>
+          {["全部",...usedCats].map(c=>(
+            <Btn key={c} onClick={()=>setFilterCat(c)}
+              style={{padding:"6px 13px",borderRadius:20,fontSize:12,fontWeight:600,whiteSpace:"nowrap",flexShrink:0,
+                border:"1.5px solid "+(filterCat===c?"#10b981":"#2a2a2a"),
+                background:filterCat===c?"#10b981":"#1e1e1e",
+                color:filterCat===c?"#fff":"#555",transition:"all .15s"}}>
+              {c==="全部"?"🍽️ 全部":CAT_ICONS[c]+" "+c}
+            </Btn>
+          ))}
+        </div>
+      )}
+      {filtered.length===0?(
+        <div style={{textAlign:"center",padding:"70px 20px"}}>
+          <div style={{fontSize:44,marginBottom:12}}>🍳</div>
+          <p style={{fontSize:16,color:"#555"}}>{recipes.length===0?"還未儲存任何食譜":"沒有符合的食譜"}</p>
+          <p style={{fontSize:13,color:"#333",marginTop:4}}>{recipes.length===0?"點擊底部「新增」開始收藏":""}</p>
+        </div>
+      ):filterCat==="全部"
+        ?CATEGORIES.filter(c=>grouped[c]).map(c=>(
+          <div key={c} style={{marginBottom:24}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+              <span style={{fontSize:18}}>{CAT_ICONS[c]}</span>
+              <span style={{color:"#ddd",fontSize:15,fontWeight:700}}>{c}</span>
+              <span style={{color:"#3a3a3a",fontSize:12}}>({grouped[c].length})</span>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:9}}>
+              {grouped[c].map(r=><RecipeCard key={r.id} recipe={r} onView={()=>onView(r)} onDelete={()=>onDelete(r.id)}/>)}
+            </div>
+          </div>
+        ))
+        :<div style={{display:"flex",flexDirection:"column",gap:9}}>
+          {filtered.map(r=><RecipeCard key={r.id} recipe={r} onView={()=>onView(r)} onDelete={()=>onDelete(r.id)}/>)}
+        </div>
+      }
+    </div>
+  );
+}
+
+// ─── RECIPE DETAIL + EDIT ─────────────────────────────────
+function RecipeDetail({recipe,onBack,onDelete,onUpdate,showToast}){
+  const [editing,setEditing]=useState(false);
+  const [form,setForm]=useState({name:recipe.name,category:recipe.category,ingredients:recipe.ingredients.join("\n"),steps:recipe.steps.join("\n")});
+  const up=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const handleUpdate=()=>{
+    if(!form.name.trim()){showToast("請填寫菜式名稱","error");return;}
+    onUpdate({...recipe,name:form.name.trim(),category:form.category,
+      ingredients:form.ingredients.split("\n").map(l=>l.trim()).filter(Boolean),
+      steps:form.steps.split("\n").map(l=>l.trim()).filter(Boolean)});
+    setEditing(false);showToast("已更新食譜 ✓");
+  };
+  return(
+    <div className="fade">
+      <div style={{padding:"44px 16px 14px",background:"#181818",borderBottom:"1px solid #222"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <button onClick={onBack} style={{color:"#10b981",fontSize:14,display:"flex",alignItems:"center",gap:5,fontWeight:500,background:"none",border:"none",cursor:"pointer"}}>← 返回</button>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={()=>setEditing(e=>!e)}
+              style={{padding:"7px 14px",borderRadius:10,background:editing?"#1e3a5f":"#1e1e1e",border:"1px solid "+(editing?"#3b82f6":"#2a2a2a"),color:editing?"#3b82f6":"#888",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+              {editing?"取消":"✏️ 編輯"}
+            </button>
+            <button onClick={onDelete} style={{padding:"7px 12px",borderRadius:10,background:"#2a0a0a",border:"1px solid #7f1d1d",color:"#ef4444",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+          </div>
+        </div>
+        {editing?(
+          <>
+            <input value={form.name} onChange={e=>up("name",e.target.value)} style={{...INP,fontSize:20,fontWeight:700,marginBottom:10}}/>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {CATEGORIES.map(c=>(
+                <Btn key={c} onClick={()=>up("category",c)}
+                  style={{padding:"5px 11px",borderRadius:20,fontSize:12,fontWeight:500,
+                    background:form.category===c?CAT_COLORS[c]+"28":"#1e1e1e",
+                    border:"1.5px solid "+(form.category===c?CAT_COLORS[c]:"#2a2a2a"),
+                    color:form.category===c?CAT_COLORS[c]:"#555"}}>
+                  {CAT_ICONS[c]} {c}
+                </Btn>
+              ))}
+            </div>
+          </>
+        ):(
+          <>
+            <div style={{marginBottom:8}}><CatPill cat={recipe.category}/></div>
+            <h2 style={{color:"#fff",fontSize:22,fontWeight:700}}>{recipe.name}</h2>
+          </>
+        )}
+      </div>
+      <div style={{padding:16,paddingBottom:40}}>
+        {editing?(
+          <>
+            <p style={SECS}>🛒 食材清單</p>
+            <textarea value={form.ingredients} onChange={e=>up("ingredients",e.target.value)} rows={6} style={{...INP,resize:"none",lineHeight:1.8,marginBottom:16}}/>
+            <p style={SECS}>👨‍🍳 製作步驟</p>
+            <textarea value={form.steps} onChange={e=>up("steps",e.target.value)} rows={7} style={{...INP,resize:"none",lineHeight:1.8,marginBottom:20}}/>
+            <Btn onClick={handleUpdate} style={{width:"100%",padding:"15px 0",borderRadius:16,fontSize:16,fontWeight:700,background:"#10b981",color:"#fff",boxShadow:"0 4px 20px rgba(16,185,129,.35)"}}>更新食譜</Btn>
+          </>
+        ):(
+          <>
+            <h3 style={{color:"#ddd",fontSize:15,fontWeight:700,marginBottom:10}}>🛒 食材清單</h3>
+            <div style={{...CARD,overflow:"hidden",marginBottom:18}}>
+              {recipe.ingredients.map((ing,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"13px 14px",borderBottom:i<recipe.ingredients.length-1?"1px solid #1e1e1e":"none"}}>
+                  <div style={{width:6,height:6,borderRadius:"50%",background:"#10b981",flexShrink:0}}/>
+                  <span style={{color:"#ddd",fontSize:15}}>{ing}</span>
+                </div>
+              ))}
+            </div>
+            <h3 style={{color:"#ddd",fontSize:15,fontWeight:700,marginBottom:10}}>👨‍🍳 製作步驟</h3>
+            <div style={{display:"flex",flexDirection:"column",gap:9}}>
+              {recipe.steps.map((step,i)=>(
+                <div key={i} style={{display:"flex",gap:12,...CARD,padding:"13px 14px"}}>
+                  <div style={{width:26,height:26,borderRadius:8,background:"#10b981",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:12,fontWeight:800,flexShrink:0,marginTop:2}}>{i+1}</div>
+                  <p style={{color:"#ccc",fontSize:15,lineHeight:1.7}}>{step}</p>
+                </div>
+              ))}
+            </div>
+            {recipe.url&&<p style={{color:"#333",fontSize:12,marginTop:16,wordBreak:"break-all"}}>🔗 {recipe.url}</p>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── CONVERTER TAB ────────────────────────────────────────
+const CONV_GROUPS=[
+  {label:"🌡️ 溫度",hint:"烤箱溫度換算",units:["°C","°F"],convert(v,fi,ti){return fi===ti?v:fi===0?(v*9/5+32):((v-32)*5/9);}},
+  {label:"⚖️ 重量",hint:"食材重量換算",units:["克 g","盎司 oz","磅 lb","公斤 kg"],base:[1,28.3495,453.592,1000],convert(v,fi,ti){return fi===ti?v:v*this.base[fi]/this.base[ti];}},
+  {label:"🥄 容量",hint:"液體容量換算",units:["毫升 ml","液盎司 fl oz","杯 cup","湯匙 tbsp","茶匙 tsp"],base:[1,29.5735,236.588,14.7868,4.92892],convert(v,fi,ti){return fi===ti?v:v*this.base[fi]/this.base[ti];}},
+  {label:"📏 長度",hint:"切割長度換算",units:["厘米 cm","英寸 in"],convert(v,fi,ti){return fi===ti?v:fi===0?v/2.54:v*2.54;}},
+];
+const TEMP_REF=[["低溫慢煮","120°C","248°F"],["烤蛋糕","175°C","347°F"],["烤雞","190°C","374°F"],["高溫烤肉","220°C","428°F"],["披薩","250°C","482°F"]];
+const VOL_REF=[["1 杯","236.6 ml","16 湯匙"],["1 湯匙","15 ml","3 茶匙"],["1 茶匙","5 ml","—"],["1 液盎司","29.6 ml","2 湯匙"]];
+
+function ConverterTab(){
+  const [ai,setAi]=useState(0);
+  const [val,setVal]=useState("");
+  const [fromU,setFU]=useState(0);
+  const [toU,setTU]=useState(1);
+  const conv=CONV_GROUPS[ai];
+  const reset=idx=>{setAi(idx);setVal("");setFU(0);setTU(1);};
+  const swap=()=>{const t=fromU;setFU(toU);setTU(t);};
+  const result=(()=>{const n=parseFloat(val);if(isNaN(n)||val==="")return null;return Math.round(conv.convert(n,fromU,toU)*10000)/10000;})();
+  const fmt=result===null?"—":(result%1===0?result.toString():result.toFixed(4).replace(/\.?0+$/,""));
+  return(
+    <div style={{padding:"0 16px 24px"}} className="fade">
+      <div style={{display:"flex",gap:7,marginBottom:20,overflowX:"auto",paddingBottom:2}}>
+        {CONV_GROUPS.map((c,i)=>(
+          <Btn key={i} onClick={()=>reset(i)} style={{padding:"8px 14px",borderRadius:12,fontSize:13,fontWeight:600,whiteSpace:"nowrap",flexShrink:0,background:ai===i?"#10b981":"#1e1e1e",border:"1px solid "+(ai===i?"#10b981":"#2a2a2a"),color:ai===i?"#fff":"#666",transition:"all .15s"}}>{c.label}</Btn>
+        ))}
+      </div>
+      <p style={{color:"#3a3a3a",fontSize:12,marginBottom:14}}>{conv.hint}</p>
+      <div style={{...CARD,padding:20,marginBottom:14}}>
+        <label style={LBL}>輸入數值</label>
+        <input type="number" value={val} onChange={e=>setVal(e.target.value)} placeholder="0" style={{...INP,fontSize:28,fontWeight:700,textAlign:"center",marginBottom:16}}/>
+        <div style={{display:"flex",alignItems:"flex-end",gap:10}}>
+          <div style={{flex:1}}><label style={LBL}>從</label><select value={fromU} onChange={e=>setFU(Number(e.target.value))} style={{...INP,cursor:"pointer"}}>{conv.units.map((u,i)=><option key={i} value={i}>{u}</option>)}</select></div>
+          <button onClick={swap} style={{marginBottom:1,width:40,height:44,borderRadius:12,background:"#1e1e1e",border:"1px solid #2a2a2a",color:"#10b981",fontSize:18,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>⇄</button>
+          <div style={{flex:1}}><label style={LBL}>至</label><select value={toU} onChange={e=>setTU(Number(e.target.value))} style={{...INP,cursor:"pointer"}}>{conv.units.map((u,i)=><option key={i} value={i}>{u}</option>)}</select></div>
+        </div>
+      </div>
+      <div style={{...CARD,padding:24,textAlign:"center",marginBottom:14}}>
+        <p style={{color:"#555",fontSize:13,marginBottom:8}}>換算結果</p>
+        <div style={{display:"flex",alignItems:"baseline",justifyContent:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{color:"#fff",fontSize:42,fontWeight:800,letterSpacing:-1}}>{fmt}</span>
+          <span style={{color:"#10b981",fontSize:18,fontWeight:600}}>{conv.units[toU]}</span>
+        </div>
+        {result!==null&&val!==""&&<p style={{color:"#3a3a3a",fontSize:13,marginTop:10}}>{val} {conv.units[fromU]} = {fmt} {conv.units[toU]}</p>}
+      </div>
+      {ai===0&&<div style={{...CARD,padding:16}}><p style={{color:"#444",fontSize:11,fontWeight:700,letterSpacing:1.5,marginBottom:10}}>📌 常用溫度參考</p>{TEMP_REF.map(r=><div key={r[0]} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:"1px solid #1e1e1e"}}><span style={{color:"#666",fontSize:13}}>{r[0]}</span><span style={{color:"#ddd",fontSize:13,fontWeight:500}}>{r[1]} / {r[2]}</span></div>)}</div>}
+      {ai===2&&<div style={{...CARD,padding:16}}><p style={{color:"#444",fontSize:11,fontWeight:700,letterSpacing:1.5,marginBottom:10}}>📌 容量速查</p>{VOL_REF.map(r=><div key={r[0]} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #1e1e1e"}}><span style={{color:"#10b981",fontSize:13,fontWeight:600}}>{r[0]}</span><span style={{color:"#555",fontSize:13}}>{r[1]} · {r[2]}</span></div>)}</div>}
+    </div>
+  );
+}
+
+// ─── SETTINGS TAB ─────────────────────────────────────────
+function SettingsTab({apiKey,onChangeKey}){
+  const [editing,setEditing]=useState(false);
+  const [newKey,setNewKey]=useState("");
+  const [show,setShow]=useState(false);
+  const masked="sk-ant-..."+apiKey.slice(-6);
+  return(
+    <div style={{padding:"0 16px 24px"}} className="fade">
+      <div style={{...CARD,padding:20,marginBottom:16}}>
+        <p style={SECS}>🔑 API Key</p>
+        {editing?(
+          <>
+            <div style={{position:"relative",marginBottom:12}}>
+              <input type={show?"text":"password"} value={newKey} onChange={e=>setNewKey(e.target.value)}
+                placeholder="sk-ant-api03-..." style={{...INP,paddingRight:50}}/>
+              <button onClick={()=>setShow(s=>!s)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#666",fontSize:16,cursor:"pointer"}}>{show?"🙈":"👁️"}</button>
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <Btn onClick={()=>setEditing(false)} style={{flex:1,padding:"11px 0",borderRadius:12,background:"#2a2a2a",color:"#fff",fontSize:14}}>取消</Btn>
+              <Btn onClick={()=>{if(newKey.trim().startsWith("sk-ant")){onChangeKey(newKey.trim());setEditing(false);}}}
+                style={{flex:1,padding:"11px 0",borderRadius:12,background:"#10b981",color:"#fff",fontSize:14,fontWeight:700}}>儲存</Btn>
+            </div>
+          </>
+        ):(
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{color:"#888",fontSize:14,fontFamily:"monospace"}}>{masked}</span>
+            <Btn onClick={()=>{setEditing(true);setNewKey("");}} style={{padding:"7px 14px",borderRadius:10,background:"#1e1e1e",border:"1px solid #2a2a2a",color:"#aaa",fontSize:13}}>更改</Btn>
+          </div>
+        )}
+      </div>
+      <div style={{...CARD,padding:16}}>
+        <p style={SECS}>ℹ️ 關於</p>
+        <p style={{color:"#555",fontSize:13,lineHeight:1.8}}>AI 食譜筆記 v2.0<br/>API Key 只儲存於本地裝置<br/>不會上傳到任何伺服器</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── BOTTOM NAV ───────────────────────────────────────────
+function BottomNav({tab,setTab,count}){
+  const items=[
+    {key:"list",icon:"📚",label:"我的食譜",badge:count},
+    {key:"add", icon:"➕",label:"新增食譜"},
+    {key:"conv",icon:"⚖️",label:"換算工具"},
+    {key:"cfg", icon:"⚙️",label:"設定"},
+  ];
+  return(
+    <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:"rgba(12,12,12,.97)",borderTop:"1px solid #1e1e1e",paddingTop:10,paddingBottom:"max(16px,env(safe-area-inset-bottom))",display:"flex",justifyContent:"space-around",zIndex:50}}>
+      {items.map(item=>(
+        <button key={item.key} onClick={()=>setTab(item.key)}
+          style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"4px 12px",color:tab===item.key?"#10b981":"#484848",position:"relative",background:"none",border:"none",cursor:"pointer",transition:"color .15s",fontFamily:"inherit"}}>
+          <span style={{fontSize:20}}>{item.icon}</span>
+          <span style={{fontSize:10,fontWeight:600}}>{item.label}</span>
+          {item.badge>0&&<span style={{position:"absolute",top:0,right:6,background:"#10b981",color:"#fff",fontSize:10,fontWeight:700,borderRadius:10,padding:"1px 5px",minWidth:16,textAlign:"center"}}>{item.badge}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── ROOT APP ─────────────────────────────────────────────
+function App(){
+  const [apiKey,setApiKey]=useState(()=>load(LS_APIKEY)||"");
+  const [tab,setTab]=useState("list");
+  const [recipes,setRecipes]=useState(()=>load(LS_KEY)||[]);
+  const [viewRecipe,setViewRecipe]=useState(null);
+  const [deleteConfirm,setDC]=useState(null);
+  const [toast,setToast]=useState(null);
+
+  useEffect(()=>save(LS_KEY,recipes),[recipes]);
+
+  const showToast=(msg,type)=>{setToast({msg,type:type||"success"});setTimeout(()=>setToast(null),2500);};
+  const handleSaveKey=key=>{setApiKey(key);save(LS_APIKEY,key);showToast("API Key 已儲存 ✓");};
+  const handleSaved=rec=>{setRecipes(r=>[rec,...r]);setTab("list");};
+  const handleUpdate=u=>{setRecipes(r=>r.map(x=>x.id===u.id?u:x));setViewRecipe(u);};
+  const handleDelete=id=>{setRecipes(r=>r.filter(x=>x.id!==id));setDC(null);if(viewRecipe&&viewRecipe.id===id)setViewRecipe(null);showToast("已刪除食譜");};
+
+  const tabTitle={list:"我的食譜",add:"新增食譜",conv:"換算工具",cfg:"設定"};
+  const SAFEPAD="max(44px, calc(env(safe-area-inset-top) + 12px))";
+
+  // First-time setup
+  if(!apiKey) return <ApiKeySetup onSave={handleSaveKey}/>;
+
+  return(
+    <div style={{background:"#121212",minHeight:"100vh",maxWidth:480,margin:"0 auto",position:"relative",paddingBottom:90}}>
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
+      {viewRecipe?(
+        <RecipeDetail recipe={viewRecipe} onBack={()=>setViewRecipe(null)} onDelete={()=>setDC(viewRecipe.id)} onUpdate={handleUpdate} showToast={showToast}/>
+      ):(
+        <>
+          <div style={{padding:SAFEPAD+" 16px 14px",background:"linear-gradient(180deg,#181818 0%,#121212 100%)"}}>
+            <p style={{color:"#10b981",fontSize:11,fontWeight:700,letterSpacing:2.5,marginBottom:3}}>AI RECIPE NOTES</p>
+            <h1 style={{color:"#fff",fontSize:24,fontWeight:700,letterSpacing:-0.5}}>{tabTitle[tab]}</h1>
+          </div>
+          {tab==="list"&&<MyRecipesTab recipes={recipes} onView={setViewRecipe} onDelete={id=>setDC(id)}/>}
+          {tab==="add" &&<AddTab onSaved={handleSaved} showToast={showToast} apiKey={apiKey}/>}
+          {tab==="conv"&&<ConverterTab/>}
+          {tab==="cfg" &&<SettingsTab apiKey={apiKey} onChangeKey={handleSaveKey}/>}
+        </>
+      )}
+      {deleteConfirm&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.8)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:99}}>
+          <div style={{background:"#1c1c1c",width:"100%",maxWidth:480,borderRadius:"20px 20px 0 0",padding:26,paddingBottom:"max(26px,env(safe-area-inset-bottom))"}} className="slideup">
+            <p style={{color:"#fff",fontSize:17,fontWeight:600,marginBottom:6}}>刪除此食譜？</p>
+            <p style={{color:"#555",fontSize:14,marginBottom:22}}>此操作無法還原。</p>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setDC(null)} style={{flex:1,padding:"13px 0",borderRadius:12,background:"#2a2a2a",color:"#fff",fontSize:15,border:"none",cursor:"pointer",fontFamily:"inherit"}}>取消</button>
+              <button onClick={()=>handleDelete(deleteConfirm)} style={{flex:1,padding:"13px 0",borderRadius:12,background:"#ef4444",color:"#fff",fontSize:15,fontWeight:700,border:"none",cursor:"pointer",fontFamily:"inherit"}}>刪除</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {!viewRecipe&&<BottomNav tab={tab} setTab={setTab} count={recipes.length}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+
+if("serviceWorker" in navigator){
+  window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+}
+</script>
+</body>
+</html>
